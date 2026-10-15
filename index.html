@@ -171,6 +171,7 @@ document.querySelectorAll("[data-k]").forEach(i=>{i.value=S.cfg[i.dataset.k];i.o
 
 /* ---- Supabase: every closed paper trade is queued, then uploaded when logged in ---- */
 const SUPABASE_URL="https://klfafovhuicekqyonfii.supabase.co",SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtsZmFmb3ZodWljZWtxeW9uZmlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4ODUzMzksImV4cCI6MjEwNzQ2MTMzOX0.SrGcwXjW05yb9CTAO-qHi1bBcs9--6axw23tUGYPy9w";
+const gk=path=>fetch(SUPABASE_URL+"/functions/v1/gecko?path="+encodeURIComponent(path),{headers:{apikey:SUPABASE_ANON_KEY,Authorization:"Bearer "+SUPABASE_ANON_KEY}});
 const sb=window.supabase?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
 let sbUser=null,syncErr="",lastSym="?";
 const uuid=()=>(crypto.randomUUID?crypto.randomUUID():"xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==="x"?r:(r&3|8)).toString(16)}));
@@ -283,7 +284,7 @@ let pool=null;
 async function checkSignal(){
   const g=S.sig;
   if(g.kind==="off"){$("sigTxt").textContent="walang napiling signal";return false}
-  const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/ohlcv/minute?aggregate=${g.tf}&limit=200`);
+  const r=await gk(`pools/${pool}/ohlcv/minute?aggregate=${g.tf}&limit=200`);
   if(!r.ok)throw new Error("candles HTTP "+r.status);
   const j=await r.json();
   const all=j.data.attributes.ohlcv_list.map(x=>({t:x[0],o:x[1],h:x[2],l:x[3],c:x[4],v:x[5]})).reverse();
@@ -437,9 +438,9 @@ let speed=1;
 const setStatus=s=>{$("kSt").textContent=s;$("live").textContent="● "+s};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const API="https://api.geckoterminal.com/api/v2/networks/solana/";
-async function jget(u){for(let t=0;t<2;t++){const r=await fetch(u);if(r.status===429){await sleep(12000);continue}if(!r.ok)throw new Error("HTTP "+r.status);return r.json()}throw new Error("rate limited")}
+async function jget(u){for(let t=0;t<2;t++){const r=await gk(u);if(r.status===429){await sleep(12000);continue}if(!r.ok)throw new Error("HTTP "+r.status);return r.json()}throw new Error("rate limited")}
 $("load").onclick=async()=>{
-  try{const j=await jget(API+"trending_pools");$("pools").value=j.data.map(x=>x.attributes.address).join("\n");log("Na-load: "+j.data.length+" pools")}
+  try{const j=await jget("trending_pools");$("pools").value=j.data.map(x=>x.attributes.address).join("\n");log("Na-load: "+j.data.length+" pools")}
   catch(e){log("Error sa trending: "+e.message)}
 };
 const f=(n,d=1)=>Number(n).toFixed(d);
@@ -451,7 +452,7 @@ $("run").onclick=async()=>{
   $("run").disabled=true;$("out").innerHTML="";const all=[];setStatus("RUNNING");
   for(let i=0;i<ids.length;i++){
     try{
-      const j=await jget(`${API}pools/${ids[i]}/ohlcv/minute?aggregate=${tf}&limit=1000`);
+      const j=await jget(`pools/${ids[i]}/ohlcv/minute?aggregate=${tf}&limit=1000`);
       const c=j.data.attributes.ohlcv_list.map(x=>({t:x[0],o:x[1],h:x[2],l:x[3],c:x[4],v:x[5]})).reverse();
       if(c.length>=150)all.push(c);log(`${i+1}/${ids.length} ${ids[i].slice(0,6)}… ${c.length} candles`);speed=4;$("kTok").textContent=all.length;
     }catch(e){log(`${i+1}/${ids.length} error: ${e.message}`)}
