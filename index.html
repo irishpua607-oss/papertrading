@@ -47,11 +47,18 @@ details summary{cursor:pointer;color:var(--ink)}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{text-align:left;padding:3px 4px;border-bottom:1px solid #1d0f11;white-space:nowrap}th{color:var(--mute);font-weight:500}
 .win{color:var(--win)}.loss{color:var(--loss)}
 .nav{display:flex;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}.nav a{flex:1;text-align:center;padding:9px;background:var(--bg);color:var(--mute);text-decoration:none;font:600 12px ui-monospace,monospace}.nav a.on{color:var(--ink);box-shadow:inset 0 -2px var(--red)}
+
+.wrap{overflow-x:auto}.p.wide{grid-column:1/-1}
+textarea{width:100%;height:96px;background:#120c0d;border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:7px;font:inherit;margin:3px 0 8px;resize:vertical}
+.grid .p table th{font-size:11px}
+#hero,#bt-hero{position:absolute;inset:0;width:100%;height:100%}
+.nav a{cursor:pointer}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 </head>
 <body>
-<nav class="nav"><a href="index.html" class="on">Paper Lab</a><a href="backtest.html">Backtest</a></nav>
+<nav class="nav"><a data-v="lab" href="#lab">Paper Lab</a><a data-v="bt" href="#bt">Backtest</a></nav>
+<div id="view-lab">
 <div class="top">
   <div class="brand"><div class="logo">~</div><div><b>PAPER LAB / trading</b><small>simulated · walang tunay na pera</small></div></div>
   <div class="k"><span>token</span><b id="kTok">-</b></div>
@@ -106,8 +113,47 @@ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,t
   <div class="p"><details><summary>RISK SETTINGS</summary><div class="sg" id="settings" style="margin-top:8px"></div>
     <p class="note">Size = (balance x risk%) / stop%. Naka-save sa browser mo.</p></details></div>
 </div>
+</div>
+<div id="view-bt" hidden>
+<div class="top">
+  <div class="brand"><div class="logo">~</div><div><b>PAPER LAB / backtest</b><small>lumang datos · walang tunay na pera</small></div></div>
+  <div class="k"><span>tokens</span><b id="bt-kTok">0</b></div>
+  <div class="k"><span>combos</span><b id="bt-kCmb">0</b></div>
+  <div class="k"><span>test trades</span><b id="bt-kTr">0</b></div>
+  <div class="k"><span>train avg</span><b id="bt-kTrain">-</b></div>
+  <div class="k"><span>status</span><b id="bt-kSt">IDLE</b></div>
+</div>
 
+<div class="hero">
+  <canvas id="bt-hero"></canvas>
+  <div class="card">
+    <div class="lab"><span>BEST PICK · TEST avg/trade</span><span class="live" id="bt-live">● IDLE</span></div>
+    <div class="bal" id="bt-bal">-</div>
+    <span class="chip" id="bt-chip">PF -</span> <span id="bt-chipAbs" style="color:var(--mute)"></span>
+    <canvas id="bt-eq"></canvas>
+  </div>
+  <div class="sig">strategy · <b id="bt-sigTxt">naghihintay</b></div>
+</div>
+
+<div class="bar">
+  <button id="bt-run">Run backtest</button>
+  <button class="alt" id="bt-load">Load trending pools</button>
+  <span id="bt-kTest" style="display:none"></span>
+</div>
+
+<div class="grid">
+  <div class="p"><h2>POOLS <i>GeckoTerminal</i></h2>
+    <label>Pool address, isa kada linya</label>
+    <textarea id="bt-pools" placeholder="pool address..."></textarea>
+    <label>Timeframe</label>
+    <select id="bt-tf"><option value="1">1m</option><option value="5" selected>5m</option><option value="15">15m</option></select></div>
+  <div class="p"><h2>LOG <i>progress</i></h2><div class="scroll" id="bt-log"></div></div>
+  <div class="p wide"><h2>RESULTS <i>TRAIN 70% / TEST 30%</i></h2><div class="wrap" id="bt-out"><div class="note">Wala pang resulta. Pindutin ang Run backtest.</div></div>
+    <p class="note">Survivorship bias: ang trending pools ay mga nanalo na. Hindi kasama ang rug pull at tunay na slippage. Ang TEST ang tingnan, hindi ang TRAIN.</p></div>
+</div>
+</div>
 <script>
+
 const DEF={start:100,risk:1,sl:15,ptp:50,pfrac:50,trail:15,daily:4,maxpos:2,maxloss:3,fee:2,minLiq:10000,minVol:20000,minAge:10,top1:10,top10:40};
 const LAB={start:"Starting balance ($)",risk:"Risk per trade (%)",sl:"Stop-loss (%)",ptp:"Partial TP sa +%",pfrac:"Ibebenta sa partial (%)",trail:"Trailing stop (%)",daily:"Daily loss limit (%)",maxpos:"Max open positions",maxloss:"Kill switch: sunod na talo",fee:"Fees + slippage (%)",minLiq:"Min liquidity ($)",minVol:"Min 24h volume ($)",minAge:"Min edad (min)",top1:"Max top holder (%)",top10:"Max top 10 (%)"};
 const KEY="paperlab.v1",$=id=>document.getElementById(id);
@@ -331,6 +377,157 @@ $("auto").onclick=()=>{S.auto=!S.auto;save();render()};
 $("reset").onclick=()=>{if(confirm("I-reset ang balance, trades, at log?")){const c=S.cfg,ob=S.outbox,sg=S.sig;S=fresh();S.outbox=ob||[];S.sig=sg;S.cfg=c;S.balance=S.dayStart=S.peak=c.start;S.eq=[c.start];history=[];save();render()}};
 addEventListener("resize",()=>{sizeHero();if(still)frame();render()});
 sizeHero();frame();render();tick();setInterval(tick,15000);
+
+</script>
+<script>
+(function(){
+
+
+/*ENGINE*/
+const FEE=2,PTP=50,PFR=50,RISK=1;
+const avg=(a,f,t)=>{let s=0;for(let i=f;i<t;i++)s+=a[i].v;return s/(t-f)};
+const SIG={
+  breakout:(c,i,p)=>{if(i<p.n)return false;let hh=0;for(let k=i-p.n;k<i;k++)hh=Math.max(hh,c[k].h);return c[i].c>hh&&c[i].v>p.vm*avg(c,i-p.n,i)},
+  momentum:(c,i,p)=>{if(i<p.m)return false;return (c[i].c/c[i-p.m].c-1)*100>=p.x&&c[i].v>p.vm*avg(c,i-p.m,i)},
+  pullback:(c,i,p)=>{if(i<p.n)return false;let hh=0;for(let k=i-p.n;k<=i;k++)hh=Math.max(hh,c[k].h);const d=(hh-c[i].c)/hh*100;return d>=p.d&&d<=p.d*2&&c[i].c>c[i].o&&c[i-1].c<c[i-1].o}
+};
+// returns fraction return of the position (after fees); entry at NEXT candle open (no lookahead)
+function trade(c,i,sl,end){
+  const e=c[i+1].o,s=sl/100;let stop=e*(1-s),peak=e,real=0,size=1,part=false;
+  for(let j=i+1;j<=end;j++){
+    const k=c[j];
+    if(k.l<=stop){const px=Math.min(k.o,stop);return{r:real+size*((px/e-1)-FEE/100),end:j}}
+    peak=Math.max(peak,k.h);stop=Math.max(stop,peak*(1-s));
+    if(!part&&k.h>=e*(1+PTP/100)){const ch=size*PFR/100;real+=ch*((PTP-FEE)/100);size-=ch;part=true;stop=Math.max(stop,e)}
+    // worst case inside one candle: high first, then low hits the raised stop
+    if(k.l<=stop)return{r:real+size*((stop/e-1)-FEE/100),end:j}
+  }
+  return{r:real+size*((c[end].c/e-1)-FEE/100),end}
+}
+function backtest(c,from,to,kind,p,sl){
+  const out=[];let i=Math.max(from,2);
+  while(i<to-1){
+    if(SIG[kind](c,i,p)){const t=trade(c,i,sl,c.length-1);out.push({ts:c[i+1].t,r:t.r});i=t.end+1}else i++;
+  }
+  return out;
+}
+function stats(trs,sl){
+  const n=trs.length;if(!n)return{n:0,wr:0,avg:0,pf:0,ret:0,dd:0};
+  trs.sort((a,b)=>a.ts-b.ts);
+  let w=0,gw=0,gl=0,bal=100,peak=100,dd=0,sum=0;
+  for(const t of trs){sum+=t.r;if(t.r>0){w++;gw+=t.r}else gl-=t.r;bal*=1+RISK/sl*t.r;peak=Math.max(peak,bal);dd=Math.max(dd,(peak-bal)/peak)}
+  return{n,wr:w/n*100,avg:sum/n*100,pf:gl?gw/gl:(gw?99:0),ret:bal-100,dd:dd*100};
+}
+const GRID=[];
+for(const sl of [10,15,25]){
+  for(const n of [12,24,48])for(const vm of [2,3,5])GRID.push({kind:"breakout",p:{n,vm},sl});
+  for(const m of [3,6,12])for(const x of [5,10,20])GRID.push({kind:"momentum",p:{m,x,vm:2},sl});
+  for(const n of [24,48])for(const d of [10,20,30])GRID.push({kind:"pullback",p:{n,d},sl});
+}
+function evalGrid(all,part){ // part: "train" | "test"
+  return GRID.map(g=>{
+    let trs=[];
+    for(const c of all){const cut=Math.floor(c.length*.7);trs=trs.concat(part==="train"?backtest(c,2,cut,g.kind,g.p,g.sl):backtest(c,cut,c.length,g.kind,g.p,g.sl))}
+    return{g,s:stats(trs,g.sl)};
+  });
+}
+/*END*/
+const $=id=>document.getElementById("bt-"+id),log=m=>{$("log").innerHTML="<div class=\"row\">"+m+"</div>"+$("log").innerHTML};
+let speed=1;
+const setStatus=s=>{$("kSt").textContent=s;$("live").textContent="● "+s};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const API="https://api.geckoterminal.com/api/v2/networks/solana/";
+async function jget(u){for(let t=0;t<2;t++){const r=await fetch(u);if(r.status===429){await sleep(12000);continue}if(!r.ok)throw new Error("HTTP "+r.status);return r.json()}throw new Error("rate limited")}
+$("load").onclick=async()=>{
+  try{const j=await jget(API+"trending_pools");$("pools").value=j.data.map(x=>x.attributes.address).join("\n");log("Na-load: "+j.data.length+" pools")}
+  catch(e){log("Error sa trending: "+e.message)}
+};
+const f=(n,d=1)=>Number(n).toFixed(d);
+const row=r=>`<tr><td>${r.g.kind}</td><td>${Object.entries(r.g.p).map(([k,v])=>k+"="+v).join(" ")}</td><td>${r.g.sl}%</td>`;
+const cells=s=>`<td>${s.n}</td><td>${f(s.wr,0)}%</td><td class="${s.avg>=0?"win":"loss"}">${f(s.avg,2)}%</td><td>${f(s.pf,2)}</td><td class="${s.ret>=0?"win":"loss"}">${f(s.ret)}%</td><td>${f(s.dd)}%</td>`;
+$("run").onclick=async()=>{
+  const ids=$("pools").value.split(/\s+/).filter(Boolean),tf=$("tf").value;
+  if(!ids.length)return log("Maglagay muna ng pool address.");
+  $("run").disabled=true;$("out").innerHTML="";const all=[];setStatus("RUNNING");
+  for(let i=0;i<ids.length;i++){
+    try{
+      const j=await jget(`${API}pools/${ids[i]}/ohlcv/minute?aggregate=${tf}&limit=1000`);
+      const c=j.data.attributes.ohlcv_list.map(x=>({t:x[0],o:x[1],h:x[2],l:x[3],c:x[4],v:x[5]})).reverse();
+      if(c.length>=150)all.push(c);log(`${i+1}/${ids.length} ${ids[i].slice(0,6)}… ${c.length} candles`);speed=4;$("kTok").textContent=all.length;
+    }catch(e){log(`${i+1}/${ids.length} error: ${e.message}`)}
+    await sleep(2300);
+  }
+  if(all.length<3){$("run").disabled=false;setStatus("IDLE");return log("Kulang ang data (kailangan ng hindi bababa sa 3 token).")}
+  await sleep(0);
+  const tr=evalGrid(all,"train").filter(r=>r.s.n>=30).sort((a,b)=>b.s.avg-a.s.avg).slice(0,8);
+  const te=evalGrid(all,"test");
+  const key=r=>JSON.stringify(r.g);const tmap=new Map(te.map(r=>[key(r),r.s]));
+  let h=`<table><tr><th>strategy</th><th>params</th><th>stop</th><th colspan="6">TRAIN (70%)</th><th colspan="6">TEST (30%, hindi pa nakita)</th></tr>
+  <tr><th></th><th></th><th></th>${["trades","win","avg/trade","PF","ret","maxDD"].map(x=>`<th>${x}</th>`).join("")}${["trades","win","avg/trade","PF","ret","maxDD"].map(x=>`<th>${x}</th>`).join("")}</tr>`;
+  for(const r of tr)h+=row(r)+cells(r.s)+cells(tmap.get(key(r)))+"</tr>";
+  $("out").innerHTML=tr.length?h+"</table>":"Walang strategy na umabot ng 30 trades sa TRAIN. Dagdagan ang mga token.";
+  log(`Tapos: ${all.length} token, ${GRID.length} combos. Hanapin ang avg/trade na positibo sa TEST pagkatapos ng fees (PF > 1.3, trades > 30).`);
+  if(tr.length){
+    const b=tr[0],bt=tmap.get(key(b));
+    $("kCmb").textContent=GRID.length;$("kTr").textContent=bt.n;$("kTrain").textContent=f(b.s.avg,2)+"%";$("kTest").textContent=f(bt.avg,2)+"%";
+    $("bal").textContent=(bt.avg>=0?"+":"")+f(bt.avg,2)+"%";
+    const ch=$("chip");ch.textContent="PF "+f(bt.pf,2);ch.className="chip"+(bt.avg<0?" neg":"");
+    $("chipAbs").textContent=bt.n+" trades sa TEST";
+    $("sigTxt").textContent=b.g.kind+" · "+Object.entries(b.g.p).map(([k,v])=>k+"="+v).join(" ")+" · stop "+b.g.sl+"%";
+    spark("eq",tr.map(r=>tmap.get(key(r)).avg),"#ff4d55");
+  }
+  setStatus("DONE");$("run").disabled=false;
+};
+
+// ---- drawing (same as paper_lab)
+function spark(id,data,color,stop){
+  const c=$(id),d=devicePixelRatio||1,r=c.getBoundingClientRect();c.width=r.width*d;c.height=r.height*d;
+  const x=c.getContext("2d");x.scale(d,d);const w=r.width,h=r.height;
+  if(data.length<2){x.fillStyle="#8a7a7c";x.font="11px monospace";x.fillText("naghihintay ng data",4,h/2);return}
+  let lo=Math.min(...data),hi=Math.max(...data);if(stop){lo=Math.min(lo,stop);hi=Math.max(hi,stop)}
+  if(hi===lo){hi+=1;lo-=1}
+  const Y=v=>h-4-(v-lo)/(hi-lo)*(h-8),X=i=>i/(data.length-1)*(w-4)+2;
+  x.beginPath();data.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));
+  x.strokeStyle=color;x.lineWidth=1.6;x.stroke();
+  x.lineTo(X(data.length-1),h);x.lineTo(X(0),h);x.closePath();x.fillStyle=color+"22";x.fill();
+  if(stop){x.setLineDash([4,4]);x.strokeStyle="#ff4d55";x.beginPath();x.moveTo(0,Y(stop));x.lineTo(w,Y(stop));x.stroke();x.setLineDash([])}
+}
+const hc=$("hero"),hx=hc.getContext("2d"),still=matchMedia("(prefers-reduced-motion:reduce)").matches;
+let streaks=[];
+function sizeHero(){const r=hc.getBoundingClientRect(),d=devicePixelRatio||1;hc.width=r.width*d;hc.height=r.height*d;
+  streaks=Array.from({length:130},()=>({x:Math.random(),y:Math.random(),l:.06+Math.random()*.28,s:.15+Math.random()*.85,a:.15+Math.random()*.6}))}
+function frame(){
+  const w=hc.width,h=hc.height;hx.clearRect(0,0,w,h);
+  for(const s of streaks){
+    if(!still){s.x-=s.s*.004*speed;if(s.x+s.l<0){s.x=1+Math.random()*.2;s.y=Math.random()}}
+    const g=hx.createLinearGradient(s.x*w,0,(s.x+s.l)*w,0);
+    g.addColorStop(0,"rgba(255,77,85,0)");g.addColorStop(1,`rgba(255,${120+s.s*100|0},${110+s.s*90|0},${s.a})`);
+    hx.strokeStyle=g;hx.lineWidth=(1+s.s)*(devicePixelRatio||1)*.8;
+    hx.beginPath();hx.moveTo(s.x*w,s.y*h);hx.lineTo((s.x+s.l)*w,s.y*h);hx.stroke();
+  }
+  speed+=(1-speed)*.02;
+  if(!still)requestAnimationFrame(frame);
+}
+
+
+addEventListener("resize",()=>{sizeHero();if(still)frame()});
+sizeHero();frame();
+
+})();
+</script>
+<script>
+(function(){
+  const tabs=[...document.querySelectorAll("[data-v]")];
+  function show(v){
+    for(const t of tabs)t.classList.toggle("on",t.dataset.v===v);
+    document.getElementById("view-lab").hidden=v!=="lab";
+    document.getElementById("view-bt").hidden=v!=="bt";
+    if(window.location.hash!=="#"+v)window.history.replaceState(null,"","#"+v);
+    window.dispatchEvent(new Event("resize"));
+  }
+  tabs.forEach(t=>t.onclick=e=>{e.preventDefault();show(t.dataset.v)});
+  show(window.location.hash==="#bt"?"bt":"lab");
+})();
 </script>
 </body>
 </html>
