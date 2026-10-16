@@ -233,6 +233,7 @@
       <label class="check"><input type="checkbox" id="copysells" checked> Copy sells (close when the trader sells)</label>
       <label class="check"><input type="checkbox" id="remember"> Remember API key in this browser</label>
       <div class="srow">
+        <button class="btn sm" id="fill" type="button">Fill watchlist from leaderboard (500 credits)</button>
         <button class="btn sm" id="save" type="button">Save settings</button>
         <button class="btn sm" id="exp-json" type="button">Export trades (JSON)</button>
         <button class="btn sm" id="exp-csv" type="button">Export trades (CSV)</button>
@@ -640,6 +641,33 @@
   $("search").addEventListener("input", render);
   $("chain").addEventListener("change", function () { S.cfg = readCfg(); save(); });
   $("toggle").addEventListener("click", function () { running ? stop() : start(); });
+  $("fill").addEventListener("click", function () {
+    var k = $("key").value.trim(), btn = $("fill"), label = btn.textContent;
+    if (!k) { setStatus("err", "Key needed", "Paste your FOMO API key first."); return; }
+    btn.disabled = true; btn.textContent = "Loading…";
+    function board(w) {
+      return fetch("https://api.fomoapi.io/v2/leaderboard/" + w + "?limit=150", { headers: { authorization: "Bearer " + k } }).then(function (r) {
+        if (r.status === 401) throw new Error("Invalid API key.");
+        if (r.status === 402) throw new Error("Out of credits.");
+        if (r.status === 429) throw new Error("Rate limit hit. Wait a minute and retry.");
+        if (!r.ok) throw new Error("Request failed (" + r.status + ").");
+        return r.json();
+      }).then(function (j) { return j.traders || []; });
+    }
+    Promise.all([board("7d"), board("30d")]).then(function (r) {
+      var by30 = {}; r[1].forEach(function (t) { by30[t.userId] = t; });
+      var list = r[0].filter(function (t) {
+        var t30 = by30[t.userId];
+        return t30 && t.pnlUsd >= 5000 && t30.pnlUsd >= 20000 && t.trades >= 15 && t.followers <= 100000;
+      }).sort(function (a, b) { return by30[b.userId].pnlUsd - by30[a.userId].pnlUsd; }).slice(0, 10);
+      if (!list.length) { setStatus("warn", "No matches", "No trader passed the default filters. Try again later."); return; }
+      S.watch = list.map(function (t) { return { handle: t.handle, userId: t.userId }; });
+      $("watch").value = S.watch.map(function (w) { return w.handle; }).join(", ");
+      save(); log("Watchlist filled with " + list.length + " traders from the leaderboard.");
+      setStatus("", "Watchlist filled", list.length + " traders added. Press Start bot.");
+    }).catch(function (e) { setStatus("err", "Could not load", e.message || "Something went wrong."); })
+      .then(function () { btn.disabled = false; btn.textContent = label; });
+  });
   $("save").addEventListener("click", saveSettings);
   function toggleSettings() { $("settings").classList.toggle("open"); }
   $("btn-setup").addEventListener("click", toggleSettings);
