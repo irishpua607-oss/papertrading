@@ -230,6 +230,7 @@
         <div><label class="l" for="sl">Stop loss (%, 0 = off)</label><div class="field"><input id="sl" type="number" min="0" value="40"></div></div>
         <div><label class="l" for="tp">Take profit (%, 0 = off)</label><div class="field"><input id="tp" type="number" min="0" value="0"></div></div>
       </div>
+      <label class="check"><input type="checkbox" id="auto"> Auto mode: copy any big buy from any trader (no watchlist needed)</label>
       <label class="check"><input type="checkbox" id="copysells" checked> Copy sells (close when the trader sells)</label>
       <label class="check"><input type="checkbox" id="remember"> Remember API key in this browser</label>
       <div class="srow">
@@ -291,7 +292,7 @@
     <div class="lower">
       <section class="box" aria-label="Results by trader">
         <div class="ph"><div><h2>Results by trader</h2><p>Who actually earns on paper</p></div></div>
-        <div class="tw"><table><thead><tr><th>TRADER</th><th class="r">CLOSED</th><th class="r">WIN RATE</th><th class="r">REALIZED</th><th class="r">AVG RETURN</th></tr></thead><tbody id="bytrader"></tbody></table></div>
+        <div class="tw"><table><thead><tr><th>TRADER</th><th class="r">CLOSED</th><th class="r">WIN RATE</th><th class="r">REALIZED</th><th class="r">AVG RETURN</th><th class="r">VERDICT</th></tr></thead><tbody id="bytrader"></tbody></table></div>
       </section>
       <section class="box" aria-label="Activity log">
         <div class="ph"><div><h2>Activity</h2><p>Signals, fills and skips</p></div></div>
@@ -344,12 +345,13 @@
   var FIELDS = ["chain", "size", "maxopen", "delay", "slip", "fee", "minliq", "minpos", "sl", "tp"];
   function readCfg() {
     var c = {}; FIELDS.forEach(function (f) { c[f] = f === "chain" ? $(f).value : Math.max(0, +$(f).value || 0); });
-    c.copysells = $("copysells").checked; return c;
+    c.copysells = $("copysells").checked; c.auto = $("auto").checked; return c;
   }
   function writeCfg() {
     var c = S.cfg || {};
     FIELDS.forEach(function (f) { if (c[f] != null) $(f).value = c[f]; });
     if (c.copysells != null) $("copysells").checked = c.copysells;
+    if (c.auto != null) $("auto").checked = c.auto;
     $("watch").value = (S.watch || []).map(function (w) { return w.handle || w.userId; }).join(", ");
   }
   function parseWatch(text) {
@@ -367,6 +369,7 @@
     save(); log("Settings saved. Watching " + S.watch.length + " traders.");
   }
   function matchWatch(m) {
+    if (S.cfg.auto) return true;
     var h = String(m.trader || "").toLowerCase();
     for (var i = 0; i < S.watch.length; i++) {
       var w = S.watch[i];
@@ -458,7 +461,7 @@
     if (!k) { setStatus("err", "Key needed", "Paste your FOMO API key under Setup."); $("settings").classList.add("open"); stop(true); return; }
     setStatus("warn", "Connecting", "Opening the Fomo alert stream…");
     ws = new WebSocket("wss://api.fomoapi.io/ws/alerts?key=" + encodeURIComponent(k));
-    ws.onopen = function () { retry = 0; setStatus("", "Connected", "Listening for " + S.watch.length + " traders."); log("Connected to the Fomo alert stream."); };
+    ws.onopen = function () { retry = 0; setStatus("", "Connected", S.cfg.auto ? "Auto mode: copying big buys from any trader." : "Listening for " + S.watch.length + " traders."); log("Connected to the Fomo alert stream."); };
     ws.onmessage = function (e) {
       var m; try { m = JSON.parse(e.data); } catch (x) { return; }
       if (m.type === "welcome") { log("Stream ready" + (m.delaySeconds ? " (delayed " + m.delaySeconds + "s on the free plan)" : " (realtime)") + "."); return; }
@@ -475,7 +478,7 @@
   }
   function start() {
     saveSettings();
-    if (!S.watch.length) { setStatus("err", "Watchlist empty", "Add at least one trader under Setup."); $("settings").classList.add("open"); return; }
+    if (!S.watch.length && !S.cfg.auto) { setStatus("err", "Watchlist empty", "Add a trader under Setup, or turn on Auto mode."); $("settings").classList.add("open"); return; }
     running = true; $("togglelabel").textContent = "Stop bot"; connect(); pollTimer = setInterval(poll, 20000);
   }
   function stop(silent) {
@@ -627,10 +630,11 @@
   function renderTraders() {
     var by = byTrader(), tb = $("bytrader"); tb.textContent = "";
     var names = Object.keys(by).sort(function (a, b) { return by[b].pnl - by[a].pnl; });
-    if (!names.length) { var tr = el("tr"), td = el("td", "empty", "Results appear after trades close."); td.colSpan = 5; tr.appendChild(td); tb.appendChild(tr); return; }
+    if (!names.length) { var tr = el("tr"), td = el("td", "empty", "Results appear after trades close."); td.colSpan = 6; tr.appendChild(td); tb.appendChild(tr); return; }
     names.forEach(function (n) {
       var b = by[n], tr = el("tr");
-      [[n], [String(b.n), "r"], [Math.round(b.w / b.n * 100) + "%", "r"], [money(b.pnl), "r " + cls(b.pnl)], [pct(b.r / b.n), "r " + cls(b.r)]].forEach(function (x) { tr.appendChild(el("td", x[1] || "", x[0])); });
+      var vd = b.n < 10 ? ["Testing", ""] : (b.w / b.n >= 0.5 && b.pnl > 0) ? ["Pass", "up"] : ["Fail", "down"];
+      [[n], [String(b.n), "r"], [Math.round(b.w / b.n * 100) + "%", "r"], [money(b.pnl), "r " + cls(b.pnl)], [pct(b.r / b.n), "r " + cls(b.r)], [vd[0], "r " + vd[1]]].forEach(function (x) { tr.appendChild(el("td", x[1] || "", x[0])); });
       tb.appendChild(tr);
     });
   }
@@ -643,7 +647,7 @@
   $("toggle").addEventListener("click", function () { running ? stop() : start(); });
   $("fill").addEventListener("click", function () {
     var k = $("key").value.trim(), btn = $("fill"), label = btn.textContent;
-    if (!k) { setStatus("err", "Key needed", "Paste your FOMO API key first."); return; }
+    if (!k) { log("Fill: paste your API key first."); setStatus("err", "Key needed", "Paste your FOMO API key first."); return; }
     btn.disabled = true; btn.textContent = "Loading…";
     function board(w) {
       return fetch("https://api.fomoapi.io/v2/leaderboard/" + w + "?limit=150", { headers: { authorization: "Bearer " + k } }).then(function (r) {
@@ -660,12 +664,12 @@
         var t30 = by30[t.userId];
         return t30 && t.pnlUsd >= 5000 && t30.pnlUsd >= 20000 && t.trades >= 15 && t.followers <= 100000;
       }).sort(function (a, b) { return by30[b.userId].pnlUsd - by30[a.userId].pnlUsd; }).slice(0, 10);
-      if (!list.length) { setStatus("warn", "No matches", "No trader passed the default filters. Try again later."); return; }
+      if (!list.length) { log("Fill: no trader passed the default filters."); setStatus("warn", "No matches", "No trader passed the default filters. Try again later."); return; }
       S.watch = list.map(function (t) { return { handle: t.handle, userId: t.userId }; });
       $("watch").value = S.watch.map(function (w) { return w.handle; }).join(", ");
       save(); log("Watchlist filled with " + list.length + " traders from the leaderboard.");
       setStatus("", "Watchlist filled", list.length + " traders added. Press Start bot.");
-    }).catch(function (e) { setStatus("err", "Could not load", e.message || "Something went wrong."); })
+    }).catch(function (e) { log("Fill failed: " + (e.message || "unknown error")); setStatus("err", "Could not load", e.message || "Something went wrong."); })
       .then(function () { btn.disabled = false; btn.textContent = label; });
   });
   $("save").addEventListener("click", saveSettings);
